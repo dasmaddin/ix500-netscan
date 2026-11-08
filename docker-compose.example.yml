@@ -1,0 +1,17 @@
+services:
+  ix500-netscan:
+    build: .
+    container_name: ix500-netscan
+    restart: unless-stopped
+    # Host networking is required: the scanner sends button events to the host's IP (UDP 55265)
+    # and identifies the computer by the host's MAC address.
+    network_mode: host
+    env_file: .env
+    environment:
+      OUTPUT_DIR: /output
+    volumes:
+      - ./scans:/output
+      - state:/state
+
+volumes:
+  state:
