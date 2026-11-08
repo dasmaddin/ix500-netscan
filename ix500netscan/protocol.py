@@ -120,7 +120,8 @@ def build_reserve(mac: bytes, ip: str, password: str | None, host_id: bytes,
     """128-byte reservation (App-Control 0x11)."""
     if len(host_id) != 6:
         raise ValueError("host ID must be 6 bytes")
-    now = (now or _dt.datetime.now()).astimezone()
+    if now is None or now.tzinfo is None:
+        now = (now or _dt.datetime.now()).astimezone()
     bias = -int(now.utcoffset().total_seconds())
     pw_flag = 1 if password else 0
     pw_field = obfuscate_password(password) if password else b"\0" * PASSWORD_FIELD_LEN

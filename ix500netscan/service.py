@@ -193,7 +193,7 @@ class Service:
         t.setblocking(False)
         self._trigger = t
 
-    def _drain_trigger(self, last: int | None) -> tuple[bool, int | None]:
+    def _drain_trigger(self, last: int | None, announce: bool = True) -> tuple[bool, int | None]:
         pressed = False
         while self._trigger:
             try:
@@ -204,7 +204,8 @@ class Service:
                 continue
             t = P.parse_trigger(data)
             if t and t.code == 1 and t.counter != last:
-                log.info("scan button (trigger #%d)", t.counter)
+                log.log(logging.INFO if announce else logging.DEBUG,
+                        "scan button (trigger #%d)%s", t.counter, "" if announce else ", already handled")
                 pressed, last = True, t.counter
         return pressed, last
 
@@ -245,10 +246,12 @@ class Service:
         session = ScanSession(host, me)
         try:
             log.info("connected: %s", session.initialize())
-            _, last = self._drain_trigger(None)
+            _, last = self._drain_trigger(None, announce=False)
             while not self._stop.is_set() and self._mode == "local":
                 pressed, last = self._drain_trigger(last)
                 if session.hw_status().button:
+                    if not pressed:
+                        log.info("scan button (hw status)")
                     pressed = True
                 if pressed:
                     self._batch(session)
@@ -257,7 +260,7 @@ class Service:
                         s.end_job()
                     session = ScanSession(host, me)
                     time.sleep(1.6)               # trigger is repeated 3x, 500 ms apart
-                    _, last = self._drain_trigger(last)
+                    _, last = self._drain_trigger(last, announce=False)
                     continue
                 if self._wake.wait(POLL_INTERVAL):
                     self._wake.clear()
