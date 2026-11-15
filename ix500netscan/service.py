@@ -18,10 +18,36 @@ log = logging.getLogger(__name__)
 
 POLL_INTERVAL = 0.25
 MONITOR_INTERVAL = 15.0
-STATUS_HINTS = {
-    0xFFFFFFF9: "scanner refused the reservation (status -7). The host ID is probably not "
-                "registered: leave HOST_ID=auto or pair a computer once with ScanSnap Home.",
-}
+BACKOFF_MIN = 5.0
+BACKOFF_MAX = 60.0
+STATUS_HOST_ID_REJECTED = 0xFFFFFFF9      # -7
+PAIRING_HELP = ("The scanner only accepts the host ID of a computer it was paired with. Pair it "
+                "once with ScanSnap Home (or ScanSnap Manager) on a Windows or Mac computer, then "
+                "restart this service (HOST_ID=auto adopts the paired host ID).")
+
+
+class ScannerUnreachable(ScannerError):
+    """No answer to the search datagram (scanner off, asleep or off Wi-Fi)."""
+
+
+class HostIdRejected(ScannerError):
+    """Reservation refused with status 0xFFFFFFF9: host ID not of a paired computer."""
+
+
+def format_host_id(host_id: bytes) -> str:
+    return ":".join(f"{b:02x}" for b in host_id)
+
+
+def host_id_hint(advertised: bytes, configured: str = "auto") -> str | None:
+    """Warning for the probe command if a reservation would probably be rejected."""
+    if configured == "auto" and not any(advertised):
+        return ("the scanner advertises no host ID, it has probably never been paired with a "
+                "computer; a reservation would be rejected (status 0xFFFFFFF9). " + PAIRING_HELP)
+    if configured != "auto" and bytes.fromhex(configured) != advertised:
+        return (f"HOST_ID={configured} differs from the host ID the scanner advertises "
+                f"({format_host_id(advertised)}); the reservation may be rejected (status "
+                "0xFFFFFFF9). Use HOST_ID=auto unless you know better.")
+    return None
 
 
 class Service:
@@ -43,6 +69,8 @@ class Service:
         self._me: LocalIdentity | None = None
         self._keepalive: KeepAlive | None = None
         self._trigger: socket.socket | None = None
+        self._backoff = BACKOFF_MIN
+        self._problem: dict | None = None      # current streak of identical failures
         self.started = time.time()
 
     # ------------------------------------------------------------------ state
@@ -86,10 +114,39 @@ class Service:
         with self._lock:
             self._errors.appendleft({"time": time.time(), "message": msg})
 
+    def _fail(self, key: str, level: int, msg: str) -> None:
+        """Log a failure once per streak; repeats of the same failure go to DEBUG only."""
+        now = time.time()
+        with self._lock:
+            p = self._problem
+            repeat = p is not None and p["kind"] == key
+            if repeat:
+                p.update(last=now, count=p["count"] + 1)
+            else:
+                self._problem = {"kind": key, "message": msg, "since": now, "last": now, "count": 1}
+                self._errors.appendleft({"time": now, "message": msg})
+        if repeat:
+            log.debug("still failing (%d times): %s", self._problem["count"], msg)
+        else:
+            log.log(level, msg)
+
+    def _recovered(self, key: str | None = None) -> None:
+        """End the current failure streak (only if it is *key*, when given)."""
+        with self._lock:
+            p = self._problem
+            if p is None or (key is not None and p["kind"] != key):
+                return
+            self._problem = None
+        if p["kind"] == "unreachable":
+            log.info("scanner reachable again")
+        else:
+            log.info("recovered after %d failed attempt(s)", p["count"])
+
     def status(self) -> dict:
         with self._lock:
             s = json.loads(json.dumps(self._status))
             s["mode"] = self._mode
+            s["problem"] = dict(self._problem) if self._problem else None
             s["errors"] = list(self._errors)
         s["version"] = __version__
         s["uptime"] = round(time.time() - self.started)
@@ -111,9 +168,13 @@ class Service:
 
     def _locate(self) -> P.SearchResponse:
         me = self._identity()
-        found = search(me, self._host or "255.255.255.255")
+        target = self._host or "broadcast"
+        try:
+            found = search(me, self._host or "255.255.255.255")
+        except OSError as e:
+            raise ScannerUnreachable(f"search toward {target} failed: {e}") from e
         if not found:
-            raise ScannerError(f"no scanner answered at {self._host or 'broadcast'}")
+            raise ScannerUnreachable(f"no scanner answered at {target}")
         if not self._host:
             r = next((r for r in found if "iX500" in r.model), found[0])
             self._host = r.ip
@@ -128,7 +189,7 @@ class Service:
         with self._lock:
             sc = self._status["scanner"]
             if r is None:
-                sc["reachable"] = False
+                sc.update(reachable=False, state="unreachable")
                 return
             sc.update(host=r.ip, name=r.name, model=r.model, reachable=True,
                       state="reserved" if r.reserved else "free" if r.free else f"{r.status:#010x}",
@@ -161,9 +222,11 @@ class Service:
         me = self._identity()
         host_id = r.host_id if self.cfg.host_id == "auto" else bytes.fromhex(self.cfg.host_id)
         st = AppControl(r.ip, me).reserve(self.cfg.password, host_id)
+        if st == STATUS_HOST_ID_REJECTED:
+            raise HostIdRejected(f"scanner rejected host ID {format_host_id(host_id)} "
+                                 f"(status 0xFFFFFFF9). {PAIRING_HELP}")
         if st != 0:
-            hint = STATUS_HINTS.get(st, "check IX500_PASSWORD")
-            raise ScannerError(f"reservation refused, status {st:#x}: {hint}")
+            raise ScannerError(f"reservation refused, status {st:#x}: check IX500_PASSWORD")
         self._set(reserved_by_us=True)
         self._keepalive = KeepAlive(r.ip, me)
         self._keepalive.start()
@@ -213,7 +276,6 @@ class Service:
     def run(self) -> None:
         self._open_trigger()
         threading.Thread(target=self._monitor, daemon=True, name="monitor").start()
-        backoff = 5.0
         try:
             while not self._stop.is_set():
                 if self._mode == "cloud":
@@ -222,24 +284,39 @@ class Service:
                     if self._sleep(30):
                         break
                     continue
-                try:
-                    r = self._locate()
-                    self._reserve(r)
-                    backoff = 5.0
-                    self._serve()
-                except (OSError, ScannerError, P.ProtocolError) as e:
-                    self._error(f"{type(e).__name__}: {e}")
-                    self._stop_keepalive()
-                    self._set(reserved_by_us=False, busy=False)
-                    self._me = None if not self.cfg.host else self._me
-                    if self._sleep(backoff):
+                if not self._attempt():
+                    if self._sleep(self._backoff):
                         break
-                    backoff = min(backoff * 2, 60.0)
+                    self._backoff = min(self._backoff * 2, BACKOFF_MAX)
         finally:
             self._release()
             if self._trigger:
                 self._trigger.close()
             log.info("stopped")
+
+    def _attempt(self) -> bool:
+        """Locate, reserve and serve once. Returns False after a failure (caller backs off)."""
+        try:
+            r = self._locate()
+            self._recovered("unreachable")
+            self._reserve(r)
+            self._recovered()
+            self._backoff = BACKOFF_MIN
+            self._serve()
+            return True
+        except ScannerUnreachable as e:
+            self._record_search(None)
+            self._fail("unreachable", logging.WARNING,
+                       f"scanner not reachable ({e}), will keep retrying")
+        except HostIdRejected as e:
+            self._fail("host_id_rejected", logging.ERROR, str(e))
+        except (OSError, ScannerError, P.ProtocolError) as e:
+            msg = f"{type(e).__name__}: {e}"
+            self._fail(msg, logging.ERROR, msg)
+        self._stop_keepalive()
+        self._set(reserved_by_us=False, busy=False)
+        self._me = None if not self.cfg.host else self._me
+        return False
 
     def _serve(self) -> None:
         host, me = self._host, self._identity()

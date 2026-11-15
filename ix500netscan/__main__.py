@@ -9,7 +9,7 @@ import sys
 from . import __version__, api
 from .client import LocalIdentity, search
 from .config import Config
-from .service import Service
+from .service import Service, host_id_hint
 
 
 def probe(cfg: Config) -> int:
@@ -21,6 +21,9 @@ def probe(cfg: Config) -> int:
     for r in found:
         state = "reserved" if r.reserved else "free" if r.free else f"{r.status:#010x}"
         print(f"{r.ip}  {r.name}  {r.model}  state={state}  host_id={r.host_id.hex()}")
+        hint = host_id_hint(r.host_id, cfg.host_id)
+        if hint:
+            print(f"  note: {hint}")
     return 0
 
 
