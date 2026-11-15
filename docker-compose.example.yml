@@ -1,6 +1,8 @@
 services:
   ix500-netscan:
-    build: .
+    image: ghcr.io/dasmaddin/ix500-netscan:latest
+    # To build the image yourself, comment out "image:" above and use:
+    # build: .
     container_name: ix500-netscan
     restart: unless-stopped
     # Host networking is required: the scanner sends button events to the host's IP (UDP 55265)
@@ -10,6 +12,7 @@ services:
     environment:
       OUTPUT_DIR: /output
     volumes:
+      # Output directory, e.g. the Paperless-ngx consume folder. Must be writable by UID 1000.
       - ./scans:/output
       - state:/state
 
