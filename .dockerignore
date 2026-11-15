@@ -6,3 +6,4 @@ tests
 docs
 *.md
 .env
+.github

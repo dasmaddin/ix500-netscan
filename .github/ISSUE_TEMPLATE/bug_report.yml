@@ -1,0 +1,46 @@
+name: Bug report
+description: Something does not work as described
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        This project is built for my own use and no support is promised, but bug reports are
+        welcome. Please remove the scanner's serial number (e.g. `iX500-A0XX000000`) and any
+        passwords from everything you paste.
+  - type: input
+    id: model
+    attributes:
+      label: Scanner model
+      placeholder: ScanSnap iX500
+    validations:
+      required: true
+  - type: input
+    id: firmware
+    attributes:
+      label: Firmware version
+      description: Shown by ScanSnap Home / ScanSnap Manager, or in the "connected:" log line.
+      placeholder: 0U00
+  - type: input
+    id: version
+    attributes:
+      label: ix500-netscan version or image tag
+      placeholder: 0.1.0 / latest
+  - type: textarea
+    id: probe
+    attributes:
+      label: Output of the probe command
+      description: "`docker compose run --rm ix500-netscan probe`. Redact the serial number."
+      render: text
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant log excerpt
+      description: "`docker compose logs ix500-netscan`, ideally with `LOG_LEVEL=DEBUG`."
+      render: text
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened, and what did you expect?
+    validations:
+      required: true

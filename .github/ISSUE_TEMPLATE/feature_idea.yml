@@ -1,0 +1,21 @@
+name: Feature or idea
+description: Suggest an improvement, share a tip or a test report for another model
+labels: ["enhancement"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Ideas and tips are welcome. This is a personal project, so no promise that anything
+        gets implemented; pull requests are welcome too.
+  - type: textarea
+    id: idea
+    attributes:
+      label: Idea or tip
+      description: What would you like to see, or what did you find out?
+    validations:
+      required: true
+  - type: textarea
+    id: context
+    attributes:
+      label: Context
+      description: Your setup, scanner model, use case.
