@@ -152,6 +152,14 @@ reverse proxy with access control in front of it.
 Scan settings are fixed to what ScanSnap Home's "auto" profile sends: colour, 300 dpi, duplex,
 JPEG. Other settings are not implemented.
 
+## Known limitations
+
+- No automatic cropping or deskewing. The iX500 detects the paper length but always scans the full
+  feeder width, so a narrow receipt arrives as a wide page with white margins. ScanSnap Home does
+  the cropping on the computer; this service does not (yet).
+- Scan settings are fixed (colour, 300 dpi, duplex, JPEG).
+- Pairing without ScanSnap software is not possible yet (see "Preparing the scanner").
+
 ## Security
 
 Treat the iX500 as an insecure device.
